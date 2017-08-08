@@ -11,6 +11,10 @@
 #include <arpa/inet.h>
 #include <sys/ioctl.h>
 #include <net/if.h>
+#include<netinet/ip_icmp.h>   //Provides declarations for icmp header
+//#include<netinet/udp.h>   //Provides declarations for udp header
+//#include<netinet/tcp.h>   //Provides declarations for tcp header
+//#include<netinet/ip.h>    //Provides declarations for ip header
 
 #define ETHERNET_SIZE 14
 /* ethernet headers are always exactly 14 bytes [1] */
@@ -64,7 +68,7 @@ int main(int argc, char *argv[])
     dev=argv[1];
 
     /* Open the session in promiscuous mode */
-    handle = pcap_open_live(dev, BUFSIZ, 1, 1000, errbuf);
+    handle = pcap_open_live(dev, BUFSIZ, 1, 1, errbuf);
     if (handle == NULL)
     {
         fprintf(stderr, "Couldn't open device %s: %s\n", dev, errbuf);
@@ -201,7 +205,7 @@ int main(int argc, char *argv[])
     //connect two structure
     packet = (u_int8_t*)malloc(sizeof(*Arp_req)+sizeof(*Eth_req));
     memcpy((void*)packet,Eth_req,ETHERNET_SIZE);
-    memcpy((void*)packet+14,Arp_req,sizeof(*Arp_req)); // by address
+    memcpy((void*)packet+14, Arp_req, sizeof(*Arp_req)); // by address
 
     //send packet
     if (pcap_sendpacket(handle, packet, 42 /* size */) != 0)
@@ -219,39 +223,58 @@ int main(int argc, char *argv[])
     // ///////////////////////////////////////////////////////////////
 
     // sniffed  = destination IP is not itself.
-    Eth_rpy = (struct ethernet_header*)malloc(sizeof(struct ethernet_header));
-    Arp_rpy = (struct arp_header*)malloc(sizeof(struct arp_header));
+    struct icmphdr *icmp_header;
+    struct iphdr *ip_header;
+    struct ethernet_header *eth_header;
+    const u_char * sniffed_pk;
 
-    printf("received a sniffed packet");
+    eth_header = (struct ethernet_header*)malloc(sizeof(struct ethernet_header));
+    ip_header = (struct iphdr*)malloc(sizeof(struct iphdr));
+    icmp_header = (struct icmphdr*)malloc(sizeof(struct icmphdr));
+
+    printf("received a sniffed packet\n");
     while(1){ //double pointer
-        res = pcap_next_ex(handle, &header, &packet);
+        res = pcap_next_ex(handle, &header, &sniffed_pk);
         if(res==0) {continue;}
 
-        /* calc size of ARP heaer */
-        Eth_rpy = (struct ethernet_header *)packet;
-        Arp_rpy = (struct arp_header *)(packet + 14);
+        /* parse sniffed packet */
+        eth_header = (struct ethernet_header*)sniffed_pk;
+        ip_header = (struct iphdr *)(sniffed_pk + sizeof(struct ethernet_header));
+        icmp_header = (struct icmphdr *)(sniffed_pk + sizeof(struct ethernet_header) + sizeof(struct iphdr));
 
-        /* check arp */
-        if(Eth_rpy->ether_type!=0x608 && Arp_rpy->oper!=512  )
+        /* check icmp */
+        if(eth_header->ether_type!=0x8 && ip_header->protocol != 1) //icmp
         {
-            printf("not ARP reply\n");
+            printf("NOT ICMP\n");
             continue;
         }
-        printf("this : %s %s\n",&(Eth_rpy->ethernet_shost), &(Eth_req->ethernet_dhost));
+        else {
+            printf("ICMP\n");
 
-        /* SNIFFED = destination IP is not itself */
-        if(strcmp((const char*)Eth_rpy->ethernet_dhost, (const char*)attackerIP.s_addr)){
-            printf("A : %s , %s\n", (const char*)Eth_rpy->ethernet_dhost, (const char*)attackerIP.s_addr);
-            continue;
-        }
-        else{
-            printf("sniffed");
+            /* SNIFFED = destination IP is not itself */
+            if(!strcmp((const char*)&(ip_header->daddr), (const char*)&(attackerIP.s_addr))){
+                printf("AA : %s , %s\n", (const char*)&(ip_header->daddr), (const char*)&(attackerIP.s_addr));
+                continue;
+            }
+            else{
+                printf("sniffed");
+                break;
+            }
         }
     }
 
     // ////////////////////RELAY THE SNIFFED PACKET///////////////////
     // ///////////////////////////////////////////////////////////////
-
+    for (i=0; i<6; i++){
+    eth_header -> ethernet_shost[i] = mac_address[i];
+    }
+    //ip_header -> saddr = mac_address; //QQQ where is port number eth? ip?
+    if (pcap_sendpacket(handle, sniffed_pk, 42 /* size */) != 0)
+    {
+        printf("fail\n");
+        //fprintf(stderr,"\nError sending the packet: \n", pcap_geterr(soc));
+        return 0;
+    }
 
 
 
