@@ -209,18 +209,20 @@ int main(int argc, char *argv[])
         //fprintf(stderr,"\nError sending the packet: \n", pcap_geterr(soc));
         return 0;
     }
-    free(Eth_req);
-    free(Arp_req);
-    free(Eth_rpy);
-    free(Arp_rpy);
+    //free(Eth_req);
+    //free(Arp_req);
+    //free(Eth_rpy);
+    //free(Arp_rpy);
 
     // ///////////////////////////////////////////////////////////////
     // ////////////////////RECIEVE A SNIFFED PACKET///////////////////
     // ///////////////////////////////////////////////////////////////
 
+    // sniffed  = destination IP is not itself.
     Eth_rpy = (struct ethernet_header*)malloc(sizeof(struct ethernet_header));
     Arp_rpy = (struct arp_header*)malloc(sizeof(struct arp_header));
 
+    printf("received a sniffed packet");
     while(1){ //double pointer
         res = pcap_next_ex(handle, &header, &packet);
         if(res==0) {continue;}
@@ -229,23 +231,22 @@ int main(int argc, char *argv[])
         Eth_rpy = (struct ethernet_header *)packet;
         Arp_rpy = (struct arp_header *)(packet + 14);
 
-        /* check ARP? */
+        /* check arp */
         if(Eth_rpy->ether_type!=0x608 && Arp_rpy->oper!=512  )
         {
             printf("not ARP reply\n");
             continue;
-            //fprintf(stderr, "-----------------------This is not ARP packet----------------------");
         }
         printf("this : %s %s\n",&(Eth_rpy->ethernet_shost), &(Eth_req->ethernet_dhost));
 
-        //arp requies
-        if(strcmp((const char*)Eth_rpy->ethernet_shost, (const char*)Eth_req->ethernet_dhost))
-        {
-            printf("MAC : %x \n",&(Arp_rpy -> sha));
-            printf("-----------\n");
-            break;
+        /* SNIFFED = destination IP is not itself */
+        if(strcmp((const char*)Eth_rpy->ethernet_dhost, (const char*)attackerIP.s_addr)){
+            printf("A : %s , %s\n", (const char*)Eth_rpy->ethernet_dhost, (const char*)attackerIP.s_addr);
+            continue;
         }
-
+        else{
+            printf("sniffed");
+        }
     }
 
     // ////////////////////RELAY THE SNIFFED PACKET///////////////////
